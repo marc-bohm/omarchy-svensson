@@ -21,6 +21,11 @@ Item {
   readonly property string pluginId: manifest && manifest.id ? String(manifest.id) : "marc-bohm.svensson"
   readonly property var svc: shell ? shell.serviceFor(pluginId) : null
 
+  // Strings come from the service, which picks the language
+  function tr(key, a, b) {
+    return svc ? svc.t(key, a, b) : key
+  }
+
   property bool opened: false
   property string view: "call"
   property string tab: "contacts"
@@ -36,7 +41,7 @@ Item {
   readonly property bool ringing: svc ? svc.ringing : false
   readonly property bool inCall: svc ? svc.inCall : false
   readonly property bool busy: ringing || inCall
-  readonly property string deviceName: svc ? svc.deviceName : "iPhone"
+  readonly property string deviceName: svc ? svc.deviceName : "Phone"
   readonly property var activeCall: svc ? svc.currentCall : null
   readonly property string caller: svc ? (activeCall ? svc.callerLabel(activeCall) : svc.lastCaller) : ""
   readonly property string callerPhoto: svc ? (activeCall ? svc.callerPhoto(activeCall) : svc.lastCallerPhoto) : ""
@@ -45,7 +50,7 @@ Item {
     var pretty = svc.formatNumber(activeCall.number)
     return pretty === caller ? "" : pretty
   }
-  readonly property string stateLabel: pendingDial && !busy ? "Wählt …" : (svc ? svc.stateLabel : "")
+  readonly property string stateLabel: pendingDial && !busy ? tr("state.dialing") : (svc ? svc.stateLabel : "")
   readonly property real heroGlow: ringing ? flashLevel : (inCall || pendingDial ? 0.42 : 0)
 
   readonly property color fg: Color.popups.text
@@ -210,7 +215,7 @@ Item {
     path: "/etc/hostname"
     printErrors: false
   }
-  readonly property string hostName: String(hostnameFile.text() || "diesem PC").trim()
+  readonly property string hostName: String(hostnameFile.text() || tr("thisPc")).trim()
 
   // ------------------------------------------------------ inline components
   // Inline components can't see ids of this file; everything comes in
@@ -494,7 +499,7 @@ Item {
             visible: root.ringing
             bordered: true
             selected: true
-            text: "Annehmen"
+            text: root.tr("answer")
             iconText: String.fromCodePoint(0xF03F2)
             fontSize: Style.font.subtitle
             verticalPadding: Style.space(10)
@@ -506,7 +511,7 @@ Item {
             width: callActions.cell
             visible: root.inCall
             bordered: true
-            text: "Ton auf PC"
+            text: root.tr("audioToPc")
             iconText: String.fromCodePoint(0xF057E)
             fontSize: Style.font.subtitle
             verticalPadding: Style.space(10)
@@ -517,7 +522,7 @@ Item {
           Button {
             width: callActions.cell
             bordered: true
-            text: root.ringing ? "Ablehnen" : "Auflegen"
+            text: root.ringing ? root.tr("decline") : root.tr("hangup")
             iconText: String.fromCodePoint(0xF03F5)
             fontSize: Style.font.subtitle
             verticalPadding: Style.space(10)
@@ -661,7 +666,7 @@ Item {
             Text {
               width: parent.width
               textFormat: Text.PlainText
-              text: root.number ? (root.svc ? root.svc.formatNumber(root.number) : root.number) : "Nummer"
+              text: root.number ? (root.svc ? root.svc.formatNumber(root.number) : root.number) : root.tr("number")
               color: root.fg
               opacity: root.number ? 1 : 0.35
               font.family: Style.font.family
@@ -677,11 +682,11 @@ Item {
               color: root.available ? root.muted : root.urgent
               elide: Text.ElideRight
               text: {
-                if (!root.available) return "Kein iPhone verbunden – Bluetooth an?"
+                if (!root.available) return root.tr("dial.offline")
                 var match = root.number && root.svc ? root.svc.contactFor(root.number) : null
                 if (match) return String.fromCodePoint(0xF0004) + " " + match.name
-                if (!root.number && root.svc && root.svc.lastDialed) return "Enter wählt " + root.svc.formatNumber(root.svc.lastDialed) + " erneut"
-                return "Tippen: Ziffern wählen · Buchstaben suchen"
+                if (!root.number && root.svc && root.svc.lastDialed) return root.tr("dial.redial", root.svc.formatNumber(root.svc.lastDialed))
+                return root.tr("dial.hint")
               }
             }
           }
@@ -739,7 +744,7 @@ Item {
               width: dialActions.width - backspace.width - dialActions.spacing
               bordered: true
               selected: true
-              text: "Anrufen"
+              text: root.tr("call")
               iconText: String.fromCodePoint(0xF03F2)
               fontSize: Style.font.subtitle
               verticalPadding: Style.space(10)
@@ -772,7 +777,7 @@ Item {
             Button {
               bordered: true
               selected: root.tab === "contacts"
-              text: "Kontakte" + (root.contactList.length ? "  " + root.contactList.length : "")
+              text: root.tr("tab.contacts") + (root.contactList.length ? "  " + root.contactList.length : "")
               iconText: String.fromCodePoint(0xF06CB)
               foreground: root.tab === "contacts" ? root.accent : root.fg
               onClicked: root.tab = "contacts"
@@ -781,7 +786,7 @@ Item {
             Button {
               bordered: true
               selected: root.tab === "recent"
-              text: "Anrufe"
+              text: root.tr("tab.calls")
               iconText: String.fromCodePoint(0xF02DA)
               foreground: root.tab === "recent" ? root.accent : root.fg
               onClicked: root.tab = "recent"
@@ -807,7 +812,7 @@ Item {
               anchors.leftMargin: Style.space(10)
               anchors.rightMargin: Style.space(10)
               textFormat: Text.PlainText
-              text: String.fromCodePoint(0xF0349) + "  " + (root.query || "Einfach lostippen zum Suchen …")
+              text: String.fromCodePoint(0xF0349) + "  " + (root.query || root.tr("search.hint"))
               color: root.query ? root.fg : root.muted
               font.family: Style.font.family
               font.pixelSize: Style.font.body
@@ -911,7 +916,7 @@ Item {
                       Text {
                         required property var modelData
                         textFormat: Text.PlainText
-                        text: (modelData.type ? modelData.type + " " : "") + (root.svc ? root.svc.formatNumber(modelData.number) : modelData.number)
+                        text: (modelData.type ? root.tr("numberType." + modelData.type) + " " : "") + (root.svc ? root.svc.formatNumber(modelData.number) : modelData.number)
                         color: numberArea.containsMouse ? root.accent : root.muted
                         font.family: Style.font.family
                         font.pixelSize: Style.font.caption
@@ -979,10 +984,10 @@ Item {
                 font.family: Style.font.family
                 font.pixelSize: Style.font.body
                 text: root.query
-                  ? "Nichts gefunden für „" + root.query + "“"
+                  ? root.tr("search.none", root.query)
                   : (root.tab === "contacts"
-                      ? "Noch keine Kontakte.\n\nAm iPhone: Einstellungen → Bluetooth → ⓘ neben „" + root.hostName + "“ → „Kontakte synchronisieren“ einschalten, dann unten auf Sync."
-                      : "Noch keine Anrufe synchronisiert.")
+                      ? root.tr("contacts.empty", root.hostName)
+                      : root.tr("calls.empty"))
               }
             }
           }
@@ -1012,7 +1017,7 @@ Item {
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
               bordered: true
-              text: "Sync"
+              text: root.tr("sync.button")
               iconText: String.fromCodePoint(0xF04E6)
               iconSpinning: root.svc ? root.svc.syncing : false
               foreground: root.fg

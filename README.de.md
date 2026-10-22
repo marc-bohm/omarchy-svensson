@@ -173,7 +173,8 @@ Stimmen pumpen und verschmieren.
 
 - Gebaut und getestet mit einem iPhone. Android-Handys sprechen dieselben
   Bluetooth-Profile und sollten funktionieren; Rückmeldungen willkommen.
-- Die Oberfläche ist vorerst auf Deutsch. Englisch kommt als Nächstes.
+- Die Oberfläche folgt der Systemsprache: Deutsch auf einem deutschen System,
+  sonst Englisch. Weitere Sprachen sind eine kleine Tabelle in `Service.qml`.
 - Anrufe über Bluetooth-Kopfhörer gehen noch nicht. Nimm ein kabelgebundenes
   Headset oder Lautsprecher und Mikro.
 - Braucht PipeWire mit dem nativen HFP-Backend von WirePlumber, in Omarchy

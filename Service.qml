@@ -28,13 +28,133 @@ Item {
   readonly property string headlightImage: "file://" + pluginDir + "/assets/headlights.png"
   readonly property string cacheFile: (Quickshell.env("XDG_CACHE_HOME") || (Quickshell.env("HOME") + "/.cache")) + "/svensson/contacts.json"
 
+  // ---------------------------------------------------------- translations
+
+  // English unless the system language has a table here; keys missing from a
+  // table fall back to English. %1, %2 … are filled from t()'s extra args.
+  readonly property string lang: String(Quickshell.env("LC_ALL") || Quickshell.env("LC_MESSAGES") || Quickshell.env("LANG") || "en").substring(0, 2).toLowerCase()
+
+  readonly property var strings: ({
+    en: {
+      "phone": "Phone",
+      "state.incoming": "Incoming call",
+      "state.dialing": "Calling …",
+      "state.alerting": "Ringing …",
+      "state.active": "Connected · %1",
+      "state.held": "On hold",
+      "state.ended": "Call ended",
+      "state.idle": "Ready",
+      "state.offline": "No phone connected",
+      "unknownNumber": "Unknown number",
+      "yesterday": "Yesterday %1",
+      "missed.title": "Missed call",
+      "missed.body": "%1 · Click to call back",
+      "sync.running": "Syncing …",
+      "sync.with": "Syncing with %1 …",
+      "sync.never": "Not synced yet",
+      "sync.contacts": "%1 contacts",
+      "sync.result": "%1 contacts, %2 calls",
+      "sync.notShared": "Phone isn't sharing contacts – see hint",
+      "sync.denied": "Phone isn't sharing its phonebook",
+      "sync.failed": "Sync failed",
+      "sync.failedWith": "Sync failed: %1",
+      "sync.button": "Sync",
+      "ago.now": "just now",
+      "ago.minutes": "%1 min ago",
+      "ago.hours": "%1 h ago",
+      "ago.days": "%1 days ago",
+      "bar.offline": "Svensson · no phone connected",
+      "bar.ringing": "Call: %1 · right click answers",
+      "bar.inCall": "%1 · %2 · right click hangs up",
+      "bar.idle": "Svensson · %1 · click opens the dialer",
+      "answer": "Answer",
+      "audioToPc": "Audio to PC",
+      "decline": "Decline",
+      "hangup": "Hang up",
+      "call": "Call",
+      "number": "Number",
+      "thisPc": "this PC",
+      "dial.offline": "No phone connected – Bluetooth on?",
+      "dial.redial": "Enter redials %1",
+      "dial.hint": "Type: digits dial · letters search",
+      "tab.contacts": "Contacts",
+      "tab.calls": "Recents",
+      "search.hint": "Just start typing to search …",
+      "search.none": "Nothing found for “%1”",
+      "contacts.empty": "No contacts yet.\n\nOn an iPhone: Settings → Bluetooth → ⓘ next to “%1” → turn on “Sync Contacts”. On Android: allow contact access for “%1”. Then press Sync below.",
+      "calls.empty": "No calls synced yet.",
+      "numberType.mobil": "mobile",
+      "numberType.arbeit": "work",
+      "numberType.privat": "home"
+    },
+    de: {
+      "phone": "Handy",
+      "state.incoming": "Eingehender Anruf",
+      "state.dialing": "Wählt …",
+      "state.alerting": "Klingelt …",
+      "state.active": "Verbunden · %1",
+      "state.held": "Gehalten",
+      "state.ended": "Aufgelegt",
+      "state.idle": "Bereit",
+      "state.offline": "Kein Handy verbunden",
+      "unknownNumber": "Unbekannte Nummer",
+      "yesterday": "Gestern %1",
+      "missed.title": "Verpasster Anruf",
+      "missed.body": "%1 · Klicken zum Zurückrufen",
+      "sync.running": "Synchronisiere …",
+      "sync.with": "Synchronisiere mit %1 …",
+      "sync.never": "Noch nicht synchronisiert",
+      "sync.contacts": "%1 Kontakte",
+      "sync.result": "%1 Kontakte, %2 Anrufe",
+      "sync.notShared": "Handy gibt keine Kontakte frei – siehe Hinweis",
+      "sync.denied": "Handy gibt das Telefonbuch nicht frei",
+      "sync.failed": "Sync fehlgeschlagen",
+      "sync.failedWith": "Sync fehlgeschlagen: %1",
+      "sync.button": "Sync",
+      "ago.now": "gerade eben",
+      "ago.minutes": "vor %1 Min",
+      "ago.hours": "vor %1 Std",
+      "ago.days": "vor %1 Tagen",
+      "bar.offline": "Svensson · kein Handy verbunden",
+      "bar.ringing": "Anruf: %1 · Rechtsklick nimmt an",
+      "bar.inCall": "%1 · %2 · Rechtsklick legt auf",
+      "bar.idle": "Svensson · %1 · Klick öffnet das Telefon",
+      "answer": "Annehmen",
+      "audioToPc": "Ton auf PC",
+      "decline": "Ablehnen",
+      "hangup": "Auflegen",
+      "call": "Anrufen",
+      "number": "Nummer",
+      "thisPc": "diesem PC",
+      "dial.offline": "Kein Handy verbunden – Bluetooth an?",
+      "dial.redial": "Enter wählt %1 erneut",
+      "dial.hint": "Tippen: Ziffern wählen · Buchstaben suchen",
+      "tab.contacts": "Kontakte",
+      "tab.calls": "Anrufe",
+      "search.hint": "Einfach lostippen zum Suchen …",
+      "search.none": "Nichts gefunden für „%1“",
+      "contacts.empty": "Noch keine Kontakte.\n\nAm iPhone: Einstellungen → Bluetooth → ⓘ neben „%1“ → „Kontakte synchronisieren“ einschalten. Bei Android: Kontaktzugriff für „%1“ erlauben. Dann unten auf Sync.",
+      "calls.empty": "Noch keine Anrufe synchronisiert.",
+      "numberType.mobil": "mobil",
+      "numberType.arbeit": "Arbeit",
+      "numberType.privat": "privat"
+    }
+  })
+
+  function t(key) {
+    var table = strings[lang] || strings.en
+    var s = table[key] !== undefined ? table[key] : (strings.en[key] !== undefined ? strings.en[key] : key)
+    for (var i = 1; i < arguments.length; i++) s = s.split("%" + i).join(String(arguments[i]))
+    return s
+  }
+
   // ------------------------------------------------------------ call state
 
   property var status: ({ available: false, service: false, state: "offline", calls: [] })
 
   readonly property bool available: status.available === true
   readonly property string callState: status.state || "offline"
-  readonly property string deviceName: status.device || "iPhone"
+  readonly property string deviceName: status.device || t("phone")
   readonly property var calls: status.calls || []
   readonly property var currentCall: pickCall(calls)
   readonly property bool ringing: callState === "incoming"
@@ -58,13 +178,13 @@ Item {
 
   readonly property string stateLabel: {
     switch (callState) {
-    case "incoming": return "Eingehender Anruf"
-    case "dialing": return "Wählt …"
-    case "alerting": return "Klingelt …"
-    case "active": return "Verbunden · " + elapsedText
-    case "held": return "Gehalten"
-    case "idle": return justEnded ? "Aufgelegt" : "Bereit"
-    default: return "Kein iPhone verbunden"
+    case "incoming": return t("state.incoming")
+    case "dialing": return t("state.dialing")
+    case "alerting": return t("state.alerting")
+    case "active": return t("state.active", elapsedText)
+    case "held": return t("state.held")
+    case "idle": return justEnded ? t("state.ended") : t("state.idle")
+    default: return t("state.offline")
     }
   }
 
@@ -103,7 +223,7 @@ Item {
   function callerLabel(call) {
     if (!call) return ""
     var contact = contactFor(call.number)
-    return (contact && contact.name) || call.name || formatNumber(call.number) || "Unbekannte Nummer"
+    return (contact && contact.name) || call.name || formatNumber(call.number) || t("unknownNumber")
   }
 
   function callerPhoto(call) {
@@ -130,18 +250,18 @@ Item {
     if (syncing || !available || demo) return false
     syncing = true
     syncError = ""
-    syncMessage = "Synchronisiere …"
+    syncMessage = t("sync.running")
     syncer.running = true
     return true
   }
 
   function syncedLabel() {
-    if (syncing) return "Synchronisiere mit " + deviceName + " …"
-    if (syncError) return contacts.length > 0 ? contacts.length + " Kontakte · " + syncError : syncError
-    if (!syncedAt) return "Noch nicht synchronisiert"
+    if (syncing) return t("sync.with", deviceName)
+    if (syncError) return contacts.length > 0 ? t("sync.contacts", contacts.length) + " · " + syncError : syncError
+    if (!syncedAt) return t("sync.never")
     var minutes = Math.floor((Date.now() / 1000 - syncedAt) / 60)
-    var ago = minutes < 1 ? "gerade eben" : minutes < 60 ? "vor " + minutes + " Min" : minutes < 1440 ? "vor " + Math.floor(minutes / 60) + " Std" : "vor " + Math.floor(minutes / 1440) + " Tagen"
-    return contacts.length + " Kontakte · " + ago
+    var ago = minutes < 1 ? t("ago.now") : minutes < 60 ? t("ago.minutes", minutes) : minutes < 1440 ? t("ago.hours", Math.floor(minutes / 60)) : t("ago.days", Math.floor(minutes / 1440))
+    return t("sync.contacts", contacts.length) + " · " + ago
   }
 
   // --------------------------------------------------------------- helpers
@@ -187,7 +307,7 @@ Item {
     var time = pad(d.getHours()) + ":" + pad(d.getMinutes())
     var startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
     if (d.getTime() >= startOfToday) return time
-    if (d.getTime() >= startOfToday - 86400000) return "Gestern " + time
+    if (d.getTime() >= startOfToday - 86400000) return t("yesterday", time)
     return pad(d.getDate()) + "." + pad(d.getMonth() + 1) + ". " + time
   }
 
@@ -298,9 +418,9 @@ Item {
   }
 
   function notifyMissed(call) {
-    var label = callerLabel(call) || "Unbekannte Nummer"
+    var label = callerLabel(call) || t("unknownNumber")
     var args = [omarchyPath + "/bin/omarchy-notification-send", "-g", String.fromCodePoint(0xF03F7),
-      "-u", "normal", "Verpasster Anruf", label + " · Klicken zum Zurückrufen"]
+      "-u", "normal", t("missed.title"), t("missed.body", label)]
     var number = call ? String(call.number || "").replace(/[^0-9+*#]/g, "") : ""
     if (number) args = args.concat(["--exec", root.tool, "dial", number])
     Quickshell.execDetached(args)
@@ -390,9 +510,9 @@ Item {
       onRead: function(data) {
         try {
           var result = JSON.parse(data)
-          root.syncMessage = result.contacts + " Kontakte, " + result.calls + " Anrufe"
+          root.syncMessage = root.t("sync.result", result.contacts, result.calls)
           if (result.fetched === 0)
-            root.syncError = "iPhone gibt keine Kontakte frei – siehe Hinweis"
+            root.syncError = root.t("sync.notShared")
         } catch (e) {}
       }
     }
@@ -405,13 +525,13 @@ Item {
         // The phone answers an unauthorized phonebook pull with a plain
         // transfer error, so say what that actually means.
         root.syncError = /transfer (error|timed out)/.test(line)
-          ? "iPhone gibt das Telefonbuch nicht frei"
-          : "Sync fehlgeschlagen: " + line
+          ? root.t("sync.denied")
+          : root.t("sync.failedWith", line)
       }
     }
     onExited: function(exitCode, exitStatus) {
       root.syncing = false
-      if (exitCode !== 0 && !root.syncError) root.syncError = "Sync fehlgeschlagen"
+      if (exitCode !== 0 && !root.syncError) root.syncError = root.t("sync.failed")
       phonebookFile.reload()
     }
   }

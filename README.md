@@ -170,7 +170,8 @@ noise suppression are switched off in it; they make voices pump and smear.
 
 - Built and tested with an iPhone. Android phones speak the same Bluetooth
   profiles and should work; reports are welcome.
-- The interface is in German for now. English strings are next.
+- The interface follows your system language: English, or German on a German
+  system. More languages are a small table in `Service.qml`.
 - Calls through Bluetooth headphones aren't supported yet. Use a wired
   headset, or speakers and a mic.
 - Needs PipeWire with WirePlumber's native HFP backend, which is Omarchy's

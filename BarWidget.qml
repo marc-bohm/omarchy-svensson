@@ -25,10 +25,11 @@ BarWidget {
 
   readonly property string timerText: svc && callState === "active" ? svc.elapsedText : ""
   readonly property string tooltip: {
-    if (!svc || !available) return "Svensson · kein iPhone verbunden"
-    if (ringing) return "Anruf: " + svc.callerLabel(svc.currentCall) + " · Rechtsklick nimmt an"
-    if (inCall) return svc.stateLabel + " · " + (svc.callerLabel(svc.currentCall) || svc.lastCaller) + " · Rechtsklick legt auf"
-    return "Svensson · " + svc.deviceName + " · Klick öffnet das Telefon"
+    if (!svc) return "Svensson"
+    if (!available) return svc.t("bar.offline")
+    if (ringing) return svc.t("bar.ringing", svc.callerLabel(svc.currentCall))
+    if (inCall) return svc.t("bar.inCall", svc.stateLabel, svc.callerLabel(svc.currentCall) || svc.lastCaller)
+    return svc.t("bar.idle", svc.deviceName)
   }
 
   visible: available || showOffline || ringing || inCall

@@ -150,6 +150,7 @@ def parse_vcards(text):
                 number = re.sub(r"[^0-9+*#]", "", value)
                 # Short codes like 110 are real; a bare "+" is parser debris
                 if len(re.sub(r"\D", "", number)) >= 2:
+                    # Stored keys stay German for cache compatibility; the UI translates them
                     kind = "mobil" if "CELL" in params else "arbeit" if "WORK" in params else "privat" if "HOME" in params else ""
                     card["tels"].append({"number": number, "type": kind})
             elif key == "PHOTO" and value.strip():
