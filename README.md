@@ -11,7 +11,7 @@ without picking up the phone.
 It lives in your bar as a 1991 Volvo 960. When someone calls, the headlights
 flash.
 
-<!-- screenshot: assets/screenshot.png -->
+![Mamma Svensson is calling: the call card, with the Volvo flashing its headlights](assets/screenshot-call.gif)
 
 [Deutsche Version](README.de.md)
 
@@ -91,6 +91,8 @@ One key does the right thing: answers when it rings, hangs up during a call,
 opens the dialer otherwise.
 
 ## Using it
+
+![The dialer: keypad on the left, recent calls on the right](assets/screenshot-dialer.png)
 
 | Where | What |
 |---|---|

@@ -11,7 +11,7 @@ Kontakten, ohne das Handy anzufassen.
 In der Leiste wohnt Svensson als Volvo 960 von 1991. Wenn jemand anruft, gibt
 er Lichthupe.
 
-<!-- screenshot: assets/screenshot.png -->
+![Mamma Svensson ruft an: die Anrufkarte, der Volvo gibt Lichthupe](assets/screenshot-call.gif)
 
 [English version](README.md)
 
@@ -92,6 +92,8 @@ Eine Taste für alles: Klingelt es, nimmt sie ab. Im Gespräch legt sie auf.
 Sonst öffnet sie das Telefon.
 
 ## Bedienung
+
+![Das Telefon: Tastenfeld links, Anrufliste rechts](assets/screenshot-dialer.png)
 
 | Wo | Was |
 |---|---|
