@@ -1,0 +1,83 @@
+#!/bin/bash
+
+# Svensson — send the PC's side of a phone call through the echo canceller.
+#
+# During a call the phone's HFP link shows up as a capture stream named
+# bluez_output.<address>.<n> that records from the default mic. This moves
+# only those streams onto echo_cancel_source (see
+# ~/.config/pipewire/pipewire.conf.d/99-echo-cancel.conf), so the default mic
+# stays the plain headset mic for everything else. Moving a stream is the same
+# thing a volume-control app does when you pick another input for it.
+#
+# If the echo canceller is missing, nothing is moved and the call keeps the
+# default mic — degraded, but never silent.
+
+set -uo pipefail
+
+TARGET=echo_cancel_source
+PATTERN='^bluez_output\.'
+
+usage() {
+  cat <<'USAGE'
+Usage: svensson-route [--check]
+
+  (no args)   Move every phone call stream onto the echo canceller
+  --check     Print which source each phone call stream records from, as JSON
+USAGE
+}
+
+nodes() { pw-dump 2>/dev/null; }
+
+# "<id>\t<node.name>" for every phone call capture stream
+phone_streams() {
+  jq -r --arg re "$PATTERN" '
+    .[] | select(.type == "PipeWire:Interface:Node")
+    | .info.props as $p
+    | select(($p["media.class"] // "") == "Stream/Input/Audio")
+    | select(($p["node.name"] // "") | test($re))
+    | "\(.id)\t\($p["node.name"])"' <<<"$1"
+}
+
+target_exists() {
+  jq -e --arg t "$TARGET" 'any(.[]; .type == "PipeWire:Interface:Node" and .info.props["node.name"] == $t)' <<<"$1" >/dev/null
+}
+
+# Name of the node feeding the given stream id, or "" when unlinked
+linked_from() {
+  jq -r --argjson id "$2" '
+    (map(select(.type == "PipeWire:Interface:Node")) | map({key: (.id | tostring), value: .info.props["node.name"]}) | from_entries) as $names
+    | [.[] | select(.type == "PipeWire:Interface:Link" and .info["input-node-id"] == $id)
+       | $names[(.info["output-node-id"] | tostring)]] | unique | join(",")' <<<"$1"
+}
+
+cmd_check() {
+  local dump id name
+  dump=$(nodes)
+  printf '['
+  local sep=""
+  while IFS=$'\t' read -r id name; do
+    [ -n "$id" ] || continue
+    printf '%s{"stream":"%s","source":"%s"}' "$sep" "$name" "$(linked_from "$dump" "$id")"
+    sep=","
+  done < <(phone_streams "$dump")
+  printf ']\n'
+}
+
+cmd_route() {
+  local dump id name
+  dump=$(nodes)
+  target_exists "$dump" || return 0
+  while IFS=$'\t' read -r id name; do
+    [ -n "$id" ] || continue
+    # Already there: leave it alone, re-targeting could make it relink mid-call
+    [ "$(linked_from "$dump" "$id")" = "$TARGET" ] && continue
+    pw-metadata -n default "$id" target.object "$TARGET" >/dev/null
+  done < <(phone_streams "$dump")
+}
+
+case ${1:-} in
+  "") cmd_route ;;
+  --check) cmd_check ;;
+  -h | --help) usage ;;
+  *) usage >&2; exit 2 ;;
+esac

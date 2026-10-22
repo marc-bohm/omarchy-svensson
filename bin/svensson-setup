@@ -1,0 +1,242 @@
+#!/bin/bash
+
+# Svensson — one-time setup for call audio and the CLI.
+#
+# The phone's HFP link records from the default mic, which has no echo
+# cancelling: the other side hears themselves. This creates a PipeWire echo
+# canceller bound to the wired headset's sound card, which svensson-route
+# moves call audio onto during calls. The default mic stays untouched.
+#
+# Safe to run again: existing pieces are detected and left alone.
+
+set -uo pipefail
+
+HERE=$(dirname "$(readlink -f "$0")")
+BIN_DIR="$HOME/.local/bin"
+PW_CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/pipewire/pipewire.conf.d"
+WP_CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/wireplumber/wireplumber.conf.d"
+AEC_CONF="$PW_CONF_DIR/90-svensson-echo-cancel.conf"
+NOSUSPEND_CONF="$WP_CONF_DIR/90-svensson-mic-no-suspend.conf"
+AEC_NODE=echo_cancel_source
+
+DRY=0
+NO_SUSPEND=0
+SOURCE=""
+SINK=""
+
+usage() {
+  cat <<'USAGE'
+Usage: svensson setup [--dry-run] [--source NODE] [--sink NODE] [--no-suspend]
+
+  --dry-run      Show what would be done, change nothing
+  --source NODE  Mic to cancel echo on (default: the current default mic)
+  --sink NODE    Matching output (default: the output on the same sound card)
+  --no-suspend   Keep that mic from suspending. Some onboard chips (e.g.
+                 Realtek ALC897) thump for a few seconds when the mic wakes
+                 up, which throws the echo canceller off at the start of calls.
+USAGE
+}
+
+say() { printf '%s\n' "$*"; }
+step() { printf '  %s %s\n' "$([ $DRY = 1 ] && echo '[dry-run]' || echo '->')" "$*"; }
+
+need() {
+  local missing=() cmd
+  for cmd in pw-dump pw-metadata wpctl jq busctl; do
+    command -v "$cmd" >/dev/null || missing+=("$cmd")
+  done
+  if (( ${#missing[@]} )); then
+    say "Missing tools: ${missing[*]}" >&2
+    return 1
+  fi
+}
+
+node_exists() {
+  pw-dump 2>/dev/null | jq -e --arg n "$1" \
+    'any(.[]; .type == "PipeWire:Interface:Node" and .info.props["node.name"] == $n)' >/dev/null
+}
+
+# Default mic, if it is a real sound card (not Bluetooth or a filter)
+detect_source() {
+  local name
+  name=$(wpctl inspect @DEFAULT_AUDIO_SOURCE@ 2>/dev/null | sed -n 's/.*node\.name = "\(.*\)"/\1/p' | head -n1)
+  [[ $name == alsa_input.* ]] && echo "$name"
+}
+
+# The output on the same sound card as the given mic
+detect_sink() {
+  pw-dump 2>/dev/null | jq -r --arg src "$1" '
+    map(select(.type == "PipeWire:Interface:Node")) as $n
+    | ($n[] | select(.info.props["node.name"] == $src) | .info.props["device.id"]) as $dev
+    | $n[] | select(.info.props["device.id"] == $dev and .info.props["media.class"] == "Audio/Sink")
+    | .info.props["node.name"]' | head -n1
+}
+
+write_file() {
+  local path=$1 content=$2
+  step "write $path"
+  [ $DRY = 1 ] && return 0
+  mkdir -p "$(dirname "$path")"
+  printf '%s\n' "$content" >"$path"
+}
+
+aec_conf() {
+  cat <<EOF
+# Written by \`svensson setup\`. Echo cancelling for phone calls.
+#
+# Bound to one sound card instead of the default devices, so it keeps working
+# while Bluetooth headphones come and go. Svensson moves only the call audio
+# onto echo_cancel_source; the default mic is not changed. Gain control and
+# noise suppression are off on purpose: they made the voice pump and smear.
+# Delete this file and restart PipeWire to undo.
+context.modules = [
+  { name = libpipewire-module-echo-cancel
+    args = {
+      library.name = aec/libspa-aec-webrtc
+      aec.args = {
+        webrtc.gain_control = false
+        webrtc.extended_filter = true
+        webrtc.high_pass_filter = true
+        webrtc.noise_suppression = false
+      }
+      capture.props = {
+        target.object = "$SOURCE"
+        node.passive = true
+      }
+      source.props = {
+        node.name = "echo_cancel_source"
+        node.description = "Svensson echo cancelling (calls only)"
+      }
+      sink.props = {
+        node.name = "echo_cancel_sink"
+        node.description = "Svensson echo cancelling (calls only)"
+      }
+      playback.props = {
+        target.object = "$SINK"
+        node.passive = true
+      }
+    }
+  }
+]
+EOF
+}
+
+nosuspend_conf() {
+  cat <<EOF
+## Written by \`svensson setup --no-suspend\`. Keeps the headset mic open so it
+## does not thump on wake-up at the start of a call. Nothing is recorded unless
+## an app uses the mic. Delete this file and restart WirePlumber to undo.
+monitor.alsa.rules = [
+  {
+    matches = [ { node.name = "$SOURCE" } ]
+    actions = { update-props = { session.suspend-timeout-seconds = 0 } }
+  }
+]
+EOF
+}
+
+link_tool() {
+  local name=$1 target="$HERE/$1" link="$BIN_DIR/$1"
+  if [ "$(readlink -f "$link" 2>/dev/null)" = "$target" ]; then
+    say "  ok $link already points to Svensson"
+  elif [ -e "$link" ] || [ -L "$link" ]; then
+    say "  !! $link exists and is something else, leaving it alone"
+  else
+    step "link $link"
+    [ $DRY = 1 ] || { mkdir -p "$BIN_DIR"; ln -s "$target" "$link"; }
+  fi
+}
+
+in_call() {
+  local state
+  state=$("$HERE/svensson" state 2>/dev/null || echo offline)
+  [[ $state != idle && $state != offline ]]
+}
+
+main() {
+  while (( $# )); do
+    case $1 in
+      --dry-run) DRY=1 ;;
+      --no-suspend) NO_SUSPEND=1 ;;
+      --source) SOURCE=${2:-}; shift ;;
+      --sink) SINK=${2:-}; shift ;;
+      -h | --help) usage; return 0 ;;
+      *) usage >&2; return 2 ;;
+    esac
+    shift
+  done
+
+  need || return 1
+
+  local restart_pw=0 restart_wp=0
+
+  say "Command line tools"
+  link_tool svensson
+  link_tool svensson-route
+
+  say "Echo cancelling"
+  if node_exists "$AEC_NODE"; then
+    say "  ok $AEC_NODE already exists, leaving it alone"
+  else
+    [ -n "$SOURCE" ] || SOURCE=$(detect_source)
+    if [ -z "$SOURCE" ]; then
+      say "  !! the default mic is not a sound card input; plug in the headset," >&2
+      say "     make it the default mic, or pass --source (see: wpctl status)" >&2
+      return 1
+    fi
+    [ -n "$SINK" ] || SINK=$(detect_sink "$SOURCE")
+    if [ -z "$SINK" ]; then
+      say "  !! no output found on the same card as $SOURCE; pass --sink" >&2
+      return 1
+    fi
+    say "  mic:    $SOURCE"
+    say "  output: $SINK"
+    write_file "$AEC_CONF" "$(aec_conf)"
+    restart_pw=1
+  fi
+
+  if (( NO_SUSPEND )); then
+    say "Mic wake-up thump"
+    [ -n "$SOURCE" ] || SOURCE=$(detect_source)
+    if [ -z "$SOURCE" ]; then
+      say "  !! cannot tell which mic; pass --source" >&2
+      return 1
+    fi
+    if [ -e "$NOSUSPEND_CONF" ]; then
+      say "  ok $NOSUSPEND_CONF already exists"
+    else
+      write_file "$NOSUSPEND_CONF" "$(nosuspend_conf)"
+      restart_wp=1
+    fi
+  fi
+
+  if (( restart_pw || restart_wp )); then
+    say "Restart audio"
+    if in_call; then
+      say "  !! a call is running; restart later with:"
+      say "     systemctl --user restart pipewire pipewire-pulse wireplumber"
+    else
+      step "restart PipeWire (sound drops for a second; Bluetooth devices may reconnect)"
+      [ $DRY = 1 ] || systemctl --user restart pipewire pipewire-pulse wireplumber
+    fi
+  fi
+
+  say "Check"
+  if [ $DRY = 1 ]; then
+    step "svensson selftest"
+  else
+    sleep 2
+    "$HERE/svensson" selftest | sed 's/^/  /'
+  fi
+
+  cat <<'EOF'
+
+Optional, by hand:
+  - Keybinding, e.g. in ~/.config/hypr/bindings.lua:
+      o.bind("SUPER + ALT + P", "Svensson", "$HOME/.local/bin/svensson toggle")
+  - Contacts and call history: omarchy pkg add bluez-obex, then allow
+    "Sync Contacts" for this PC in the phone's Bluetooth settings.
+EOF
+}
+
+main "$@"

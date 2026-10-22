@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "marc-bohm.svensson",
+  "name": "Svensson",
+  "version": "1.1.0",
+  "author": "Marc Bohm",
+  "description": "Take your phone calls on the desktop: hands-free over Bluetooth with echo cancelling, contacts and call history, styled after a 1991 Volvo 960 car phone",
+  "kinds": [
+    "service",
+    "bar-widget",
+    "panel"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml",
+    "panel": "CallPanel.qml"
+  },
+  "barWidget": {
+    "displayName": "Svensson",
+    "description": "Volvo 960 phone indicator with answer, hang up and dial",
+    "category": "Network",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "showWhenOffline": false
+    },
+    "schema": [
+      { "key": "showWhenOffline", "type": "boolean", "label": "Show when offline", "description": "Keep the Volvo in the bar while no phone is connected.", "defaultValue": false }
+    ]
+  }
+}

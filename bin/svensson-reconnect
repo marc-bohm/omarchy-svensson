@@ -1,0 +1,92 @@
+#!/bin/bash
+
+# Svensson — bring the paired phone back onto the PC after it drifted out
+# of range, got switched off, or the PC rebooted. BlueZ does not re-dial the
+# handsfree profile on its own, so the plugin polls this while it has no phone.
+#
+# Safety: reconnecting mid-call makes the phone reroute live call audio to the
+# PC, so this refuses to act unless the telephony service reports `offline`.
+# Everything else (idle, ringing, in a call) means hands off.
+
+set -uo pipefail
+
+HERE=$(dirname "$(readlink -f "$0")")
+TOOL="$HERE/svensson"
+BLUEZ=org.bluez
+IF_DEVICE=org.bluez.Device1
+IF_OM=org.freedesktop.DBus.ObjectManager
+UUID_HFP_AG=0000111f-0000-1000-8000-00805f9b34fb
+
+usage() {
+  cat <<'USAGE'
+Usage: svensson-reconnect [--status]
+
+  (no args)   Reconnect the paired phone, but only while no phone is connected
+  --status    Print what it would do as JSON, without touching Bluetooth
+USAGE
+}
+
+# Paired devices that offer the handsfree audio gateway, i.e. actual phones.
+# Emits "<object path>\t<address>\t<alias>\t<connected>" per device.
+phones() {
+  busctl --system --json=short call "$BLUEZ" / "$IF_OM" GetManagedObjects 2>/dev/null \
+    | jq -r --arg hfp "$UUID_HFP_AG" --arg iface "$IF_DEVICE" '
+        .data[0] | to_entries[]
+        | select(.value[$iface] != null)
+        | .key as $path | .value[$iface] as $d
+        | select(($d.Paired.data // false) and (($d.UUIDs.data // []) | index($hfp)))
+        | [$path, ($d.Address.data // ""), ($d.Alias.data // $d.Name.data // "phone"),
+           (($d.Connected.data // false) | tostring)]
+        | @tsv'
+}
+
+# "offline" means the telephony service sees no phone at all — the only state
+# in which grabbing the connection cannot interrupt anything.
+phone_state() {
+  [ -x "$TOOL" ] || { echo unknown; return; }
+  "$TOOL" state 2>/dev/null || echo unknown
+}
+
+main() {
+  local mode=${1:-run}
+  case $mode in
+    -h|--help) usage; return 0 ;;
+    --status|run) ;;
+    *) usage >&2; return 2 ;;
+  esac
+
+  local state
+  state=$(phone_state)
+
+  local path addr alias connected target="" target_addr="" target_alias=""
+  while IFS=$'\t' read -r path addr alias connected; do
+    [ -n "$path" ] || continue
+    if [ "$connected" = "true" ]; then
+      [ "$mode" = "--status" ] && printf '{"action":"none","reason":"connected","device":"%s"}\n' "$alias"
+      return 0
+    fi
+    if [ -z "$target" ]; then
+      target=$path; target_addr=$addr; target_alias=$alias
+    fi
+  done < <(phones)
+
+  if [ -z "$target" ]; then
+    [ "$mode" = "--status" ] && printf '{"action":"none","reason":"no paired phone"}\n'
+    return 1
+  fi
+
+  if [ "$state" != "offline" ]; then
+    [ "$mode" = "--status" ] && printf '{"action":"none","reason":"busy","state":"%s"}\n' "$state"
+    return 0
+  fi
+
+  if [ "$mode" = "--status" ]; then
+    printf '{"action":"connect","device":"%s","address":"%s"}\n' "$target_alias" "$target_addr"
+    return 0
+  fi
+
+  # The phone answers slowly when it is asleep; BlueZ blocks meanwhile.
+  busctl --system --timeout=20 call "$BLUEZ" "$target" "$IF_DEVICE" Connect >/dev/null 2>&1
+}
+
+main "$@"

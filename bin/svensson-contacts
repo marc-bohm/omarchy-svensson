@@ -1,0 +1,294 @@
+#!/usr/bin/env python3
+"""Pull the phonebook and call history from the paired phone over Bluetooth
+PBAP (via bluez-obex) and cache them as JSON for the Svensson plugin.
+
+  svensson-contacts sync [MAC]   pull contacts + call history
+  svensson-contacts lookup NUMBER   print the contact name for a number
+  svensson-contacts path            print the cache file path
+"""
+
+import base64
+import hashlib
+import json
+import os
+import re
+import sys
+import tempfile
+import time
+
+import gi
+
+gi.require_version("Gio", "2.0")
+from gi.repository import Gio, GLib  # noqa: E402
+
+OBEX = "org.bluez.obex"
+CACHE_DIR = os.path.join(os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache")), "svensson")
+CACHE_FILE = os.path.join(CACHE_DIR, "contacts.json")
+PHOTO_DIR = os.path.join(CACHE_DIR, "photos")
+
+
+def log(msg):
+    print(f"svensson-contacts: {msg}", file=sys.stderr)
+
+
+def default_mac():
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+    reply = bus.call_sync(
+        "org.pipewire.Telephony", "/org/pipewire/Telephony", "org.freedesktop.DBus.ObjectManager",
+        "GetManagedObjects", None, None, Gio.DBusCallFlags.NONE, 3000, None)
+    for _path, ifaces in reply.unpack()[0].items():
+        ag = ifaces.get("org.pipewire.Telephony.AudioGateway1")
+        if ag and ag.get("Address"):
+            return ag["Address"]
+    return None
+
+
+class Pbap:
+    def __init__(self, mac):
+        self.bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+        reply = self.bus.call_sync(
+            OBEX, "/org/bluez/obex", "org.bluez.obex.Client1", "CreateSession",
+            GLib.Variant("(sa{sv})", (mac, {"Target": GLib.Variant("s", "pbap")})),
+            GLib.VariantType("(o)"), Gio.DBusCallFlags.NONE, 60000, None)
+        self.session = reply.unpack()[0]
+
+    def close(self):
+        try:
+            self.bus.call_sync(
+                OBEX, "/org/bluez/obex", "org.bluez.obex.Client1", "RemoveSession",
+                GLib.Variant("(o)", (self.session,)), None, Gio.DBusCallFlags.NONE, 5000, None)
+        except GLib.Error:
+            pass
+
+    def _pba(self, method, args, sig, reply_type):
+        return self.bus.call_sync(
+            OBEX, self.session, "org.bluez.obex.PhonebookAccess1", method,
+            GLib.Variant(sig, args) if sig else None,
+            GLib.VariantType(reply_type) if reply_type else None,
+            Gio.DBusCallFlags.NONE, 60000, None)
+
+    def pull(self, folder):
+        """Select a folder (pb = phonebook, cch = combined call history) and pull it as vCard text."""
+        self._pba("Select", ("int", folder), "(ss)", None)
+        fd, target = tempfile.mkstemp(prefix=f"svensson-{folder}-", suffix=".vcf")
+        os.close(fd)
+        os.unlink(target)  # obexd refuses to overwrite
+        reply = self._pba("PullAll", (target, {"Format": GLib.Variant("s", "vcard30")}),
+                          "(sa{sv})", "(oa{sv})")
+        transfer = reply.unpack()[0]
+        try:
+            self._wait(transfer)
+            with open(target, "r", encoding="utf-8", errors="replace") as fh:
+                return fh.read()
+        finally:
+            if os.path.exists(target):
+                os.unlink(target)
+
+    def _wait(self, transfer, timeout=120):
+        loop = GLib.MainLoop()
+        state = {"status": None}
+
+        def on_props(_conn, _sender, _path, _iface, _signal, params):
+            _name, changed, _invalid = params.unpack()
+            if "Status" in changed:
+                state["status"] = changed["Status"]
+                if state["status"] in ("complete", "error"):
+                    loop.quit()
+
+        sub = self.bus.signal_subscribe(
+            OBEX, "org.freedesktop.DBus.Properties", "PropertiesChanged", transfer,
+            "org.bluez.obex.Transfer1", Gio.DBusSignalFlags.NONE, on_props)
+
+        # The transfer may already be done before we subscribed
+        try:
+            reply = self.bus.call_sync(
+                OBEX, transfer, "org.freedesktop.DBus.Properties", "Get",
+                GLib.Variant("(ss)", ("org.bluez.obex.Transfer1", "Status")),
+                None, Gio.DBusCallFlags.NONE, 5000, None)
+            state["status"] = reply.unpack()[0]
+        except GLib.Error:
+            # Object already gone means it finished
+            state["status"] = state["status"] or "complete"
+
+        if state["status"] not in ("complete", "error"):
+            GLib.timeout_add_seconds(timeout, loop.quit)
+            loop.run()
+        self.bus.signal_unsubscribe(sub)
+        if state["status"] != "complete":
+            raise RuntimeError(f"transfer {state['status'] or 'timed out'}")
+
+
+def unfold(text):
+    return re.sub(r"\r?\n[ \t]", "", text)
+
+
+def unescape(value):
+    return value.replace("\\n", " ").replace("\\,", ",").replace("\\;", ";").replace("\\\\", "\\").strip()
+
+
+def parse_vcards(text):
+    cards = []
+    for block in re.findall(r"BEGIN:VCARD(.*?)END:VCARD", unfold(text), re.S | re.I):
+        card = {"fn": "", "n": "", "tels": [], "photo": None, "call": None}
+        for line in block.splitlines():
+            if ":" not in line:
+                continue
+            head, value = line.split(":", 1)
+            parts = head.split(";")
+            key = parts[0].upper()
+            if "." in key:  # item1.TEL
+                key = key.split(".", 1)[1]
+            params = ";".join(parts[1:]).upper()
+            if key == "FN":
+                card["fn"] = unescape(value)
+            elif key == "N":
+                fields = [unescape(f) for f in value.split(";")]
+                family = fields[0] if fields else ""
+                given = fields[1] if len(fields) > 1 else ""
+                card["n"] = " ".join(p for p in (given, family) if p)
+            elif key == "TEL":
+                number = re.sub(r"[^0-9+*#]", "", value)
+                # Short codes like 110 are real; a bare "+" is parser debris
+                if len(re.sub(r"\D", "", number)) >= 2:
+                    kind = "mobil" if "CELL" in params else "arbeit" if "WORK" in params else "privat" if "HOME" in params else ""
+                    card["tels"].append({"number": number, "type": kind})
+            elif key == "PHOTO" and value.strip():
+                card["photo"] = value.strip()
+            elif key.startswith("X-IRMC-CALL-DATETIME"):
+                kind = "missed" if "MISSED" in params else "received" if "RECEIVED" in params else "dialed" if "DIALED" in params else ""
+                card["call"] = {"kind": kind, "when": value.strip()}
+        cards.append(card)
+    return cards
+
+
+def save_photo(data):
+    try:
+        raw = base64.b64decode(data, validate=False)
+    except (ValueError, TypeError):
+        return ""
+    if len(raw) < 64:
+        return ""
+    ext = "png" if raw[:4] == b"\x89PNG" else "jpg"
+    name = hashlib.sha1(raw).hexdigest()[:16] + "." + ext
+    path = os.path.join(PHOTO_DIR, name)
+    if not os.path.exists(path):
+        with open(path, "wb") as fh:
+            fh.write(raw)
+    return path
+
+
+def call_time(value):
+    # 20260915T114210 -> ISO; leave unknown formats as-is
+    m = re.match(r"(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})", value or "")
+    return f"{m[1]}-{m[2]}-{m[3]}T{m[4]}:{m[5]}:{m[6]}" if m else (value or "")
+
+
+def number_key(number):
+    digits = re.sub(r"\D", "", number or "")
+    return digits[-9:] if len(digits) >= 6 else digits
+
+
+def sync(mac):
+    os.makedirs(PHOTO_DIR, exist_ok=True)
+    pbap = Pbap(mac)
+    try:
+        phonebook = parse_vcards(pbap.pull("pb"))
+        try:
+            history = parse_vcards(pbap.pull("cch"))
+        except (GLib.Error, RuntimeError) as err:
+            log(f"call history unavailable: {err}")
+            history = []
+    finally:
+        pbap.close()
+
+    contacts = []
+    for card in phonebook:
+        name = card["fn"] or card["n"]
+        if not name or not card["tels"]:
+            continue
+        contacts.append({
+            "name": name,
+            "numbers": card["tels"],
+            "photo": save_photo(card["photo"]) if card["photo"] else "",
+        })
+    contacts.sort(key=lambda c: c["name"].casefold())
+
+    # An empty pull usually means the phone withheld access; keep what we had
+    fetched = len(contacts)
+    previous = {}
+    try:
+        with open(CACHE_FILE, encoding="utf-8") as fh:
+            previous = json.load(fh)
+    except (OSError, ValueError):
+        pass
+    if not contacts:
+        contacts = previous.get("contacts", [])
+    if not history and previous.get("calls"):
+        history = None
+
+    by_number = {}
+    for contact in contacts:
+        for tel in contact["numbers"]:
+            by_number.setdefault(number_key(tel["number"]), contact)
+
+    calls = [] if history is not None else previous.get("calls", [])
+    for card in history or []:
+        if not card["call"] or not card["tels"]:
+            continue
+        number = card["tels"][0]["number"]
+        match = by_number.get(number_key(number))
+        calls.append({
+            "kind": card["call"]["kind"],
+            "when": call_time(card["call"]["when"]),
+            "number": number,
+            "name": match["name"] if match else (card["fn"] or card["n"]),
+            "photo": match["photo"] if match else "",
+        })
+    calls.sort(key=lambda c: c["when"], reverse=True)
+
+    data = {"device": mac, "syncedAt": int(time.time()), "contacts": contacts, "calls": calls[:100]}
+    tmp = CACHE_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False)
+    os.replace(tmp, CACHE_FILE)
+    print(json.dumps({"contacts": len(contacts), "fetched": fetched, "calls": len(calls), "file": CACHE_FILE}))
+
+
+def lookup(number):
+    try:
+        with open(CACHE_FILE, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return 1
+    key = number_key(number)
+    for contact in data.get("contacts", []):
+        if any(number_key(t["number"]) == key for t in contact["numbers"]):
+            print(contact["name"])
+            return 0
+    return 1
+
+
+def main(argv):
+    cmd = argv[1] if len(argv) > 1 else ""
+    if cmd == "sync":
+        mac = argv[2] if len(argv) > 2 else default_mac()
+        if not mac:
+            log("no phone connected")
+            return 2
+        try:
+            sync(mac)
+        except (GLib.Error, RuntimeError) as err:
+            log(f"sync failed: {err}")
+            return 1
+        return 0
+    if cmd == "lookup" and len(argv) > 2:
+        return lookup(argv[2])
+    if cmd == "path":
+        print(CACHE_FILE)
+        return 0
+    print(__doc__.strip(), file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

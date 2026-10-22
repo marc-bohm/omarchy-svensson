@@ -1,0 +1,237 @@
+#!/bin/bash
+
+# Svensson — iPhone hands-free control via PipeWire's Bluetooth telephony
+# D-Bus service (org.pipewire.Telephony, provided by WirePlumber's native
+# HFP backend). The PC acts as the car kit; the phone keeps the SIM.
+
+set -uo pipefail
+
+SVC=org.pipewire.Telephony
+ROOT=/org/pipewire/Telephony
+PLUGIN_ID=marc-bohm.svensson
+IF_AG=org.pipewire.Telephony.AudioGateway1
+IF_TRANSPORT=org.pipewire.Telephony.AudioGatewayTransport1
+IF_CALL=org.pipewire.Telephony.Call1
+IF_OM=org.freedesktop.DBus.ObjectManager
+
+usage() {
+  cat <<'USAGE'
+Usage: svensson <command> [args]
+
+  status         Print current phone/call state as JSON
+  watch          Print state JSON whenever it changes (for the shell plugin)
+  answer         Answer the ringing call
+  hangup         Reject the ringing call, or end the current call(s)
+  toggle         Ringing -> answer, in a call -> hang up, idle -> open dialer
+  dial <number>  Place a call through the phone
+  audio          Pull call audio over to the PC
+  dialer         Open the Omarchy dialer panel
+  state          Print just the call state (offline|idle|incoming|dialing|alerting|active|held)
+  selftest       Check, without a call, that call audio would go through the echo canceller
+  setup          One-time setup: echo cancelling and CLI links (--dry-run to preview)
+USAGE
+}
+
+om_objects() {
+  busctl --user --json=short call "$SVC" "$1" "$IF_OM" GetManagedObjects 2>/dev/null
+}
+
+device_alias() {
+  local addr=$1 path hci
+  path="dev_${addr//:/_}"
+  for hci in hci0 hci1 hci2; do
+    busctl --system --json=short get-property org.bluez "/org/bluez/$hci/$path" org.bluez.Device1 Alias 2>/dev/null |
+      jq -r '.data' 2>/dev/null && return 0
+  done
+  return 1
+}
+
+status_json() {
+  local root ag calls alias addr
+  if ! root=$(om_objects "$ROOT"); then
+    echo '{"available":false,"service":false,"state":"offline","calls":[]}'
+    return
+  fi
+
+  ag=$(jq -r --arg ifc "$IF_AG" '.data[0] | to_entries[] | select(.value[$ifc]) | .key' <<<"$root" | head -n1)
+  if [[ -z $ag ]]; then
+    echo '{"available":false,"service":true,"state":"offline","calls":[]}'
+    return
+  fi
+
+  calls=$(om_objects "$ag") || calls='{"data":[{}]}'
+  addr=$(jq -r --arg ag "$ag" --arg ifc "$IF_AG" '.data[0][$ag][$ifc].Address.data // ""' <<<"$root")
+  alias=$(device_alias "$addr" || echo "iPhone")
+
+  jq -cn --argjson root "$root" --argjson calls "$calls" --arg ag "$ag" --arg alias "$alias" \
+    --arg ifAg "$IF_AG" --arg ifTr "$IF_TRANSPORT" --arg ifCall "$IF_CALL" '
+    ($root.data[0][$ag]) as $o
+    | ($o[$ifAg] // {}) as $a
+    | ($o[$ifTr] // {}) as $t
+    | [ ($calls.data[0] // {}) | to_entries[]
+        | select(.value[$ifCall])
+        | .value[$ifCall] as $c
+        | { path: .key,
+            state: ($c.State.data // ""),
+            number: ($c.LineIdentification.data // ""),
+            name: ($c.Name.data // ""),
+            incomingLine: ($c.IncomingLine.data // ""),
+            multiparty: ($c.Multiparty.data // false) }
+        | select(.state != "disconnected") ] as $cl
+    | ($cl | map(.state)) as $states
+    | ([ "incoming", "waiting", "active", "alerting", "dialing", "held" ]
+        | map(select(. as $s | $states | index($s))) | .[0] // "idle") as $state
+    | { available: true,
+        service: true,
+        ag: $ag,
+        address: ($a.Address.data // ""),
+        device: $alias,
+        audio: ($t.State.data // ""),
+        state: (if $state == "waiting" then "incoming" else $state end),
+        calls: $cl }'
+}
+
+ag_path() {
+  local root
+  root=$(om_objects "$ROOT") || return 1
+  jq -r --arg ifc "$IF_AG" '.data[0] | to_entries[] | select(.value[$ifc]) | .key' <<<"$root" | head -n1 | grep .
+}
+
+call_with_state() {
+  local status=$1
+  shift
+  jq -r --argjson want "$(printf '%s\n' "$@" | jq -R . | jq -s .)" \
+    '.calls[] | select(.state as $s | $want | index($s)) | .path' <<<"$status" | head -n1 | grep .
+}
+
+require_phone() {
+  local ag
+  ag=$(ag_path) || { echo "svensson: no phone connected" >&2; exit 2; }
+  echo "$ag"
+}
+
+cmd_answer() {
+  local status call
+  status=$(status_json)
+  call=$(call_with_state "$status" incoming waiting) || { echo "svensson: no ringing call" >&2; exit 1; }
+  busctl --user call "$SVC" "$call" "$IF_CALL" Answer
+}
+
+cmd_hangup() {
+  local status call ag
+  status=$(status_json)
+  ag=$(jq -r '.ag // empty' <<<"$status")
+  [[ -n $ag ]] || { echo "svensson: no phone connected" >&2; exit 2; }
+  if call=$(call_with_state "$status" incoming waiting); then
+    busctl --user call "$SVC" "$call" "$IF_CALL" Hangup
+  else
+    busctl --user call "$SVC" "$ag" "$IF_AG" HangupAll
+  fi
+}
+
+cmd_dial() {
+  local number=${1:-} ag
+  number=$(tr -cd '0-9+*#' <<<"$number")
+  [[ -n $number ]] || { echo "svensson: dial needs a number" >&2; exit 1; }
+  ag=$(require_phone)
+  busctl --user call "$SVC" "$ag" "$IF_AG" Dial s "$number"
+}
+
+cmd_audio() {
+  local ag
+  ag=$(require_phone)
+  busctl --user call "$SVC" "$ag" "$IF_TRANSPORT" Activate
+}
+
+# Fake a phone call stream (same name shape as the real HFP one), route it and
+# see where it ends up — so routing can be tested without calling anyone.
+cmd_selftest() {
+  local route fake source
+  route="$(dirname "$(readlink -f "$0")")/svensson-route"
+  pw-record -P '{ node.name = "bluez_output.SELFTEST.1" }' - >/dev/null 2>&1 &
+  fake=$!
+  sleep 1.5
+  "$route"
+  sleep 1.5
+  source=$("$route" --check | jq -r '.[] | select(.stream == "bluez_output.SELFTEST.1") | .source')
+  kill "$fake" 2>/dev/null
+  wait "$fake" 2>/dev/null
+  if [[ $source == echo_cancel_source ]]; then
+    echo "OK: call audio would go through the echo canceller"
+  else
+    echo "FAIL: call audio would come from '${source:-nowhere}' instead of echo_cancel_source" >&2
+    return 1
+  fi
+}
+
+cmd_dialer() {
+  omarchy-shell shell summon "$PLUGIN_ID" '{"view":"dial"}' >/dev/null
+}
+
+cmd_toggle() {
+  local state
+  state=$(status_json | jq -r .state)
+  case $state in
+    incoming) cmd_answer ;;
+    active | dialing | alerting | held) cmd_hangup ;;
+    *) cmd_dialer ;;
+  esac
+}
+
+cmd_watch() {
+  local last="" mon_fd mon_pid line
+
+  emit() {
+    local cur
+    cur=$(status_json)
+    if [[ $cur != "$last" ]]; then
+      printf '%s\n' "$cur" || exit 0
+      last=$cur
+    fi
+  }
+
+  trap '[[ -n ${mon_pid:-} ]] && kill "$mon_pid" 2>/dev/null' EXIT
+  trap 'exit 0' TERM INT HUP
+  emit
+
+  while true; do
+    exec {mon_fd}< <(exec gdbus monitor --session --dest "$SVC" 2>/dev/null)
+    mon_pid=$!
+
+    while true; do
+      if IFS= read -r -t 5 -u "$mon_fd" line; then
+        # Coalesce a burst of signals (call added + property changes) into one emit
+        while IFS= read -r -t 0.15 -u "$mon_fd" line; do :; done
+        emit
+      elif (( $? > 128 )); then
+        # Heartbeat: a blank line makes us die of SIGPIPE once the shell that
+        # read us is gone, and the re-query catches anything the monitor missed
+        printf '\n' || exit 0
+        emit
+      else
+        break # monitor died (service restarted)
+      fi
+    done
+
+    kill "$mon_pid" 2>/dev/null
+    exec {mon_fd}<&-
+    emit
+    sleep 2
+  done
+}
+
+case ${1:-} in
+  status) status_json ;;
+  state) status_json | jq -r .state ;;
+  watch) cmd_watch ;;
+  answer) cmd_answer ;;
+  hangup) cmd_hangup ;;
+  toggle) cmd_toggle ;;
+  dial) shift; cmd_dial "$*" ;;
+  audio) cmd_audio ;;
+  dialer) cmd_dialer ;;
+  selftest) cmd_selftest ;;
+  setup) shift; exec "$(dirname "$(readlink -f "$0")")/svensson-setup" "$@" ;;
+  -h | --help | help | "") usage ;;
+  *) usage >&2; exit 1 ;;
+esac
