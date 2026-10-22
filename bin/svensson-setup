@@ -147,6 +147,22 @@ link_tool() {
   fi
 }
 
+# The canceller's own volume knobs must sit at 100 %: anything lower makes the
+# other side quieter and weakens the mic, no matter how the real output is
+# turned. WirePlumber remembers them, so they can drift from earlier sessions.
+# The user's volume control stays the real output, after the canceller.
+level_canceller() {
+  local n id
+  for n in echo_cancel_sink echo-cancel-playback echo_cancel_source echo-cancel-capture; do
+    id=$(pw-dump 2>/dev/null | jq -r --arg n "$n" \
+      '.[] | select(.type == "PipeWire:Interface:Node" and .info.props["node.name"] == $n) | .id' | head -n1)
+    [ -n "$id" ] || continue
+    [ "$(wpctl get-volume "$id" 2>/dev/null)" = "Volume: 1.00" ] && continue
+    step "set $n volume to 100 %"
+    [ $DRY = 1 ] || wpctl set-volume "$id" 1.0
+  done
+}
+
 in_call() {
   local state
   state=$("$HERE/svensson" state 2>/dev/null || echo offline)
@@ -221,12 +237,16 @@ main() {
     fi
   fi
 
+  say "Canceller levels"
+  [ $DRY = 1 ] || sleep 2
+  level_canceller
+  say "  ok"
+
   say "Check"
   if [ $DRY = 1 ]; then
     step "svensson selftest"
   else
-    sleep 2
-    "$HERE/svensson" selftest | sed 's/^/  /'
+    "$HERE/svensson" selftest 2>&1 | sed 's/^/  /'
   fi
 
   cat <<'EOF'
