@@ -47,6 +47,19 @@ Item {
       "state.offline": "No phone connected",
       "unknownNumber": "Unknown number",
       "yesterday": "Yesterday %1",
+      "date": "%1 %2",
+      "month.0": "Jan",
+      "month.1": "Feb",
+      "month.2": "Mar",
+      "month.3": "Apr",
+      "month.4": "May",
+      "month.5": "Jun",
+      "month.6": "Jul",
+      "month.7": "Aug",
+      "month.8": "Sep",
+      "month.9": "Oct",
+      "month.10": "Nov",
+      "month.11": "Dec",
       "missed.title": "Missed call",
       "missed.body": "%1 · Click to call back",
       "sync.running": "Syncing …",
@@ -99,6 +112,19 @@ Item {
       "state.offline": "Kein Handy verbunden",
       "unknownNumber": "Unbekannte Nummer",
       "yesterday": "Gestern %1",
+      "date": "%1.%2.",
+      "month.0": "01",
+      "month.1": "02",
+      "month.2": "03",
+      "month.3": "04",
+      "month.4": "05",
+      "month.5": "06",
+      "month.6": "07",
+      "month.7": "08",
+      "month.8": "09",
+      "month.9": "10",
+      "month.10": "11",
+      "month.11": "12",
       "missed.title": "Verpasster Anruf",
       "missed.body": "%1 · Klicken zum Zurückrufen",
       "sync.running": "Synchronisiere …",
@@ -311,7 +337,7 @@ Item {
     var startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
     if (d.getTime() >= startOfToday) return time
     if (d.getTime() >= startOfToday - 86400000) return t("yesterday", time)
-    return pad(d.getDate()) + "." + pad(d.getMonth() + 1) + ". " + time
+    return t("date", pad(d.getDate()), t("month." + d.getMonth())) + " " + time
   }
 
   // ---------------------------------------------------------------- ingest
@@ -453,6 +479,23 @@ Item {
   // `idle` opens the dialer with the demo phonebook and no call.
   property bool demo: false
   property var demoPhonebook: ({ contacts: [], calls: [], syncedAt: 0 })
+
+  // The redial hint and last caller are real numbers too; park them while
+  // the demo runs and put them back afterwards
+  property var parkedRecent: null
+  onDemoChanged: {
+    if (demo) {
+      parkedRecent = { dialed: lastDialed, caller: lastCaller, photo: lastCallerPhoto }
+      lastDialed = "+46 70 174 06 42"
+      lastCaller = ""
+      lastCallerPhoto = ""
+    } else if (parkedRecent) {
+      lastDialed = parkedRecent.dialed
+      lastCaller = parkedRecent.caller
+      lastCallerPhoto = parkedRecent.photo
+      parkedRecent = null
+    }
+  }
 
   // Numbers are from +46 70 174 06 05–99, the range Sweden reserves for fiction
   function makeDemoPhonebook() {
