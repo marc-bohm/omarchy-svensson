@@ -106,8 +106,12 @@ Ausprobieren ohne Anruf:
 
 ```bash
 omarchy-shell svensson demo incoming   # auch: dialing, alerting, active, held
+omarchy-shell svensson demo idle       # nur das Telefon
 omarchy-shell svensson demo off
 ```
+
+Der Demo-Modus bringt sein eigenes Telefonbuch mit. So kannst du Screenshots
+machen, ohne deine echten Kontakte zu zeigen. Grüß das Fika-Komitee.
 
 ## Kommandozeile
 

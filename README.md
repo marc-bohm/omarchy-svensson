@@ -105,8 +105,12 @@ Want to see it without a call?
 
 ```bash
 omarchy-shell svensson demo incoming   # also: dialing, alerting, active, held
+omarchy-shell svensson demo idle       # just the dialer
 omarchy-shell svensson demo off
 ```
+
+Demo mode brings its own phonebook, so you can take screenshots without
+showing anyone your real contacts. Say hi to the Fika Committee.
 
 ## Command line
 

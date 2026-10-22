@@ -191,9 +191,12 @@ Item {
   // -------------------------------------------------------------- contacts
 
   property var phonebook: ({ contacts: [], calls: [], syncedAt: 0 })
-  readonly property var contacts: phonebook.contacts || []
-  readonly property var recentCalls: phonebook.calls || []
-  readonly property int syncedAt: phonebook.syncedAt || 0
+  // Demo mode swaps in a made-up phonebook, so screenshots and screencasts
+  // never show anyone's real contacts
+  readonly property var book: demo ? demoPhonebook : phonebook
+  readonly property var contacts: book.contacts || []
+  readonly property var recentCalls: book.calls || []
+  readonly property int syncedAt: book.syncedAt || 0
   readonly property var numberIndex: buildIndex(contacts)
   property bool syncing: false
   property string syncMessage: ""
@@ -446,8 +449,56 @@ Item {
   }
 
   // Fake call states for trying the UI without a real call:
-  //   omarchy-shell svensson demo incoming|dialing|alerting|active|held|off
+  //   omarchy-shell svensson demo incoming|dialing|alerting|active|held|idle|off
+  // `idle` opens the dialer with the demo phonebook and no call.
   property bool demo: false
+  property var demoPhonebook: ({ contacts: [], calls: [], syncedAt: 0 })
+
+  // Numbers are from +46 70 174 06 05–99, the range Sweden reserves for fiction
+  function makeDemoPhonebook() {
+    var c = function(name, number, type) {
+      return { name: name, numbers: [{ number: number, type: type || "mobil" }], photo: "" }
+    }
+    var contacts = [
+      c("Arch Wiki (always right)", "+46 70 174 06 05", "arbeit"),
+      c("Björn – owes me 200 kr", "+46 70 174 06 08"),
+      c("Car Warranty Department", "+46 70 174 06 13", "arbeit"),
+      c("Dentist – let it ring", "+46 70 174 06 21", "arbeit"),
+      c("Elk Crossing Hotline", "+46 70 174 06 34", "arbeit"),
+      c("Fika Committee", "+46 70 174 06 42", "arbeit"),
+      c("Future Me", "+46 70 174 06 55"),
+      c("Grandma Astrid", "+46 70 174 06 60", "privat"),
+      c("Lagom Consulting AB", "+46 70 174 06 67", "arbeit"),
+      c("Lars at the Garage", "+46 70 174 06 71", "arbeit"),
+      c("Mamma Svensson", "+46 70 174 06 77"),
+      c("Previous Owner of the 960", "+46 70 174 06 83"),
+      c("Rubber Duck (debugging)", "+46 70 174 06 89"),
+      c("Sven, the other Svensson", "+46 70 174 06 94")
+    ]
+    var pad = function(v) { return v < 10 ? "0" + v : String(v) }
+    var ago = function(minutes) {
+      var d = new Date(Date.now() - minutes * 60000)
+      return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate())
+        + "T" + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":00"
+    }
+    var call = function(kind, contact, minutes) {
+      return { kind: kind, when: ago(minutes), number: contact.numbers[0].number, name: contact.name, photo: "" }
+    }
+    var by = function(name) { return contacts.filter(function(x) { return x.name === name })[0] }
+    return {
+      contacts: contacts,
+      calls: [
+        call("missed", by("Car Warranty Department"), 12),
+        call("received", by("Mamma Svensson"), 64),
+        call("dialed", by("Fika Committee"), 190),
+        call("missed", by("Elk Crossing Hotline"), 1500),
+        call("received", by("Rubber Duck (debugging)"), 1620),
+        call("dialed", by("Arch Wiki (always right)"), 2950),
+        call("missed", by("Dentist – let it ring"), 4400)
+      ],
+      syncedAt: Math.floor(Date.now() / 1000) - 120
+    }
+  }
 
   function runDemo(kind, number) {
     if (kind === "off") {
@@ -458,19 +509,27 @@ Item {
       refreshTimer.restart()
       return "ok"
     }
-    if (["incoming", "dialing", "alerting", "active", "held"].indexOf(kind) === -1)
-      return "usage: demo incoming|dialing|alerting|active|held|off"
+    if (["incoming", "dialing", "alerting", "active", "held", "idle"].indexOf(kind) === -1)
+      return "usage: demo incoming|dialing|alerting|active|held|idle|off"
 
-    // Ring as a real contact when there is one, so the card shows a photo
-    var sample = contacts.length > 0 ? contacts[Math.floor(Math.random() * contacts.length)] : null
-    var demoNumber = number || (currentCall && demo ? currentCall.number : "")
-      || (sample && sample.numbers[0] ? sample.numbers[0].number : "+46701740642")
+    if (!demo) demoPhonebook = makeDemoPhonebook()
     demo = true
     lastLine = ""
+
+    if (kind === "idle") {
+      justEnded = false
+      ingest(JSON.stringify({ available: true, service: true, ag: "demo", address: "", device: "Car Phone", audio: "idle", state: "idle", calls: [] }))
+      openDialer("")
+      return "ok"
+    }
+
+    // Keep the caller across demo steps; a new demo call rings as a random demo contact
+    var sample = contacts[Math.floor(Math.random() * contacts.length)]
+    var demoNumber = number || (currentCall ? currentCall.number : "") || sample.numbers[0].number
     ingest(JSON.stringify({
-      available: true, service: true, ag: "demo", address: "", device: deviceName, audio: "idle",
+      available: true, service: true, ag: "demo", address: "", device: "Car Phone", audio: "idle",
       state: kind,
-      calls: [{ path: "demo/call1", state: kind, number: demoNumber, name: sample ? "" : "Sven Svensson", incomingLine: "", multiparty: false }]
+      calls: [{ path: "demo/call1", state: kind, number: demoNumber, name: "", incomingLine: "", multiparty: false }]
     }))
     return "ok"
   }
