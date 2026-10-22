@@ -134,8 +134,8 @@ svensson-contacts sync     # Kontakte und Anrufliste sofort holen
 **Dein Gegenüber hört sich selbst.** `svensson selftest` ausführen. Es
 simuliert einen Anruf und prüft, ob er bei der Echo-Unterdrückung landet,
 ganz ohne Telefonat. Während eines echten Anrufs sollte
-`svensson-route --check` `echo_cancel_source` zeigen. Schlägt der Selbsttest
-fehl, `svensson setup` noch einmal laufen lassen.
+`svensson-route --check` bei beiden Verbindungen `"ok":true` zeigen. Schlägt
+der Selbsttest fehl, `svensson setup` noch einmal laufen lassen.
 
 **Nur in den ersten Sekunden.** Dein Mikro wummert vermutlich beim Aufwachen.
 `svensson setup --no-suspend` ausführen.
@@ -154,17 +154,21 @@ Bluetooth HFP. Das native HFP-Backend von WirePlumber stellt Anrufe per D-Bus
 bereit (`org.pipewire.Telephony`); Svensson beobachtet und steuert diesen
 Dienst. Kontakte und Anrufliste kommen über PBAP mit `bluez-obex`.
 
-Im Gespräch erscheint das Handy in PipeWire als Aufnahme-Stream
-(`bluez_output.<adresse>.<n>`), der sonst vom Standard-Mikro aufnehmen würde.
-`svensson-route` verschiebt genau diesen Stream auf `echo_cancel_source`, eine
-WebRTC-Echo-Unterdrückung, die an die Soundkarte deines Headsets gebunden ist.
-Automatische Lautstärke und Rauschunterdrückung sind darin aus; sie lassen
-Stimmen pumpen und verschmieren.
+Im Gespräch erscheint das Handy in PipeWire als zwei Streams: die Stimme
+deines Gegenübers (`bluez_input.<adresse>.<n>`) und dein Mikro zum Handy
+(`bluez_output.<adresse>.<n>`). `svensson-route` schickt beide durch eine
+WebRTC-Echo-Unterdrückung, die an die Soundkarte deines Headsets gebunden ist:
+Die Stimme läuft über `echo_cancel_sink`, damit der Filter weiß, wonach er
+suchen muss, und dein Mikro kommt aus `echo_cancel_source`, mit diesem Echo
+herausgerechnet. Das Handy kann die Streams mitten im Gespräch neu aufbauen,
+deshalb prüft Svensson während eines Anrufs laufend nach. Automatische
+Lautstärke und Rauschunterdrückung sind im Filter aus; sie lassen Stimmen
+pumpen und verschmieren.
 
 | Datei | Aufgabe |
 |---|---|
 | `bin/svensson` | CLI und Zustands-Watcher, spricht mit `org.pipewire.Telephony` |
-| `bin/svensson-route` | Schickt den Anruf-Ton durch die Echo-Unterdrückung |
+| `bin/svensson-route` | Schickt beide Richtungen eines Anrufs durch die Echo-Unterdrückung |
 | `bin/svensson-setup` | Einmalige Einrichtung |
 | `bin/svensson-reconnect` | Verbindet das gekoppelte Handy, wenn das Telefon geöffnet wird |
 | `bin/svensson-contacts` | Telefonbuch und Anrufliste über PBAP |

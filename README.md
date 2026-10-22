@@ -132,8 +132,8 @@ svensson-contacts sync     # pull contacts and call history now
 
 **The other side hears themselves.** Run `svensson selftest`. It fakes a
 call stream and checks that it lands on the echo canceller, no phone call
-needed. During a real call, `svensson-route --check` should show
-`echo_cancel_source`. If the selftest fails, run `svensson setup` again.
+needed. During a real call, `svensson-route --check` should show `"ok":true`
+for both streams. If the selftest fails, run `svensson setup` again.
 
 **They hear themselves for the first few seconds only.** Your microphone
 probably thumps on wake-up. Run `svensson setup --no-suspend`.
@@ -152,16 +152,20 @@ Bluetooth HFP. WirePlumber's native HFP backend exposes calls on D-Bus
 (`org.pipewire.Telephony`); Svensson watches that service and drives it.
 Contacts and call history come over PBAP via `bluez-obex`.
 
-During a call the phone appears in PipeWire as a capture stream
-(`bluez_output.<address>.<n>`) that would normally record from the default
-mic. `svensson-route` moves just that stream onto `echo_cancel_source`, a
-WebRTC echo canceller bound to your headset's sound card. Gain control and
-noise suppression are switched off in it; they make voices pump and smear.
+During a call the phone appears in PipeWire as two streams: the other
+side's voice (`bluez_input.<address>.<n>`) and your mic going out
+(`bluez_output.<address>.<n>`). `svensson-route` moves both through a WebRTC
+echo canceller bound to your headset's sound card: the voice plays via
+`echo_cancel_sink`, so the canceller knows what to listen for, and your mic
+comes from `echo_cancel_source`, with that echo taken out. The phone can
+rebuild these streams mid-call, so Svensson keeps checking during a call.
+Gain control and noise suppression are off in the canceller; they make voices
+pump and smear.
 
 | File | Role |
 |---|---|
 | `bin/svensson` | CLI and state watcher, talks to `org.pipewire.Telephony` |
-| `bin/svensson-route` | Moves call audio onto the echo canceller |
+| `bin/svensson-route` | Routes both directions of a call through the echo canceller |
 | `bin/svensson-setup` | One-time setup |
 | `bin/svensson-reconnect` | Reconnects the paired phone when the dialer opens |
 | `bin/svensson-contacts` | Phonebook and call history over PBAP |

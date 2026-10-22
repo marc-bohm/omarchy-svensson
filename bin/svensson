@@ -143,25 +143,36 @@ cmd_audio() {
   busctl --user call "$SVC" "$ag" "$IF_TRANSPORT" Activate
 }
 
-# Fake a phone call stream (same name shape as the real HFP one), route it and
-# see where it ends up — so routing can be tested without calling anyone.
+# Fake both phone call streams (same name shape as the real HFP ones), route
+# them and see where they end up — so routing can be tested without a call.
 cmd_selftest() {
-  local route fake source
+  local route mic voice result fail=0
   route="$(dirname "$(readlink -f "$0")")/svensson-route"
   pw-record -P '{ node.name = "bluez_output.SELFTEST.1" }' - >/dev/null 2>&1 &
-  fake=$!
+  mic=$!
+  pw-play --raw --format s16 --rate 16000 --channels 1 \
+    -P '{ node.name = "bluez_input.SELFTEST.0" }' - </dev/zero >/dev/null 2>&1 &
+  voice=$!
   sleep 1.5
   "$route"
   sleep 1.5
-  source=$("$route" --check | jq -r '.[] | select(.stream == "bluez_output.SELFTEST.1") | .source')
-  kill "$fake" 2>/dev/null
-  wait "$fake" 2>/dev/null
-  if [[ $source == echo_cancel_source ]]; then
-    echo "OK: call audio would go through the echo canceller"
-  else
-    echo "FAIL: call audio would come from '${source:-nowhere}' instead of echo_cancel_source" >&2
-    return 1
-  fi
+  result=$("$route" --check | jq -c '[.[] | select(.stream | test("SELFTEST"))]')
+  kill "$mic" "$voice" 2>/dev/null
+  wait "$mic" "$voice" 2>/dev/null
+
+  check() {
+    local kind=$1 want=$2 label=$3 got
+    got=$(jq -r --arg k "$kind" '.[] | select(.kind == $k) | .linked' <<<"$result")
+    if [[ $got == "$want" ]]; then
+      echo "OK:   $label goes through $want"
+    else
+      echo "FAIL: $label goes to '${got:-nowhere}' instead of $want" >&2
+      fail=1
+    fi
+  }
+  check mic echo_cancel_source "your mic (to the phone)"
+  check voice echo_cancel_sink "their voice (to your headset)"
+  return $fail
 }
 
 cmd_dialer() {
