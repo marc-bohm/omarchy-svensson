@@ -442,17 +442,36 @@ Item {
       return true
     }
     startedLocally = true
-    run(["dial", n])
+    runWithInput(["dial", "--stdin"], n)
     return true
   }
 
   function notifyMissed(call) {
     var label = callerLabel(call) || t("unknownNumber")
-    var args = [omarchyPath + "/bin/omarchy-notification-send", "-g", String.fromCodePoint(0xF03F7),
-      "-u", "normal", t("missed.title"), t("missed.body", label)]
     var number = call ? String(call.number || "").replace(/[^0-9+*#]/g, "") : ""
-    if (number) args = args.concat(["--exec", root.tool, "dial", number])
-    Quickshell.execDetached(args)
+    runWithInput(["notify-missed"], JSON.stringify({
+      title: t("missed.title"), body: t("missed.body", label),
+      glyph: String.fromCodePoint(0xF03F7), number: number
+    }))
+  }
+
+  // Numbers and names are private: anything on a command line shows up in
+  // every local user's process list, so they go to the CLI over stdin instead.
+  // One job at a time, in order.
+  property var inputQueue: []
+
+  function runWithInput(args, input) {
+    inputQueue = inputQueue.concat([{ args: args, input: input }])
+    if (!withInput.running) runNextWithInput()
+  }
+
+  function runNextWithInput() {
+    if (!alive || withInput.running || inputQueue.length === 0) return
+    var job = inputQueue[0]
+    inputQueue = inputQueue.slice(1)
+    withInput.input = job.input
+    withInput.command = [root.tool].concat(job.args)
+    withInput.running = true
   }
 
   function openCall() {
@@ -683,6 +702,17 @@ Item {
     id: endedTimer
     interval: 2600
     onTriggered: root.justEnded = false
+  }
+
+  Process {
+    id: withInput
+    property string input: ""
+    stdinEnabled: true
+    onStarted: {
+      write(input + "\n")
+      input = ""
+    }
+    onExited: Qt.callLater(root.runNextWithInput)
   }
 
   Process {

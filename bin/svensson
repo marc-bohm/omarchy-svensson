@@ -24,6 +24,7 @@ Usage: svensson <command> [args]
   hangup         Reject the ringing call, or end the current call(s)
   toggle         Ringing -> answer, in a call -> hang up, idle -> open dialer
   dial <number>  Place a call through the phone
+  dial --stdin   Same, number read from stdin (keeps it out of the process list)
   audio          Pull call audio over to the PC
   dialer         Open the Omarchy dialer panel
   state          Print just the call state (offline|idle|incoming|dialing|alerting|active|held)
@@ -63,9 +64,12 @@ status_json() {
   addr=$(jq -r --arg ag "$ag" --arg ifc "$IF_AG" '.data[0][$ag][$ifc].Address.data // ""' <<<"$root")
   alias=$(device_alias "$addr" || echo "iPhone")
 
-  jq -cn --argjson root "$root" --argjson calls "$calls" --arg ag "$ag" --arg alias "$alias" \
-    --arg ifAg "$IF_AG" --arg ifTr "$IF_TRANSPORT" --arg ifCall "$IF_CALL" '
-    ($root.data[0][$ag]) as $o
+  # Caller numbers and names go in over stdin: arguments are visible to every
+  # local user in the process list, stdin is not
+  { printf '%s\n%s\n' "$root" "$calls"; printf '%s' "$alias" | jq -Rs .; } |
+  jq -cs --arg ag "$ag" --arg ifAg "$IF_AG" --arg ifTr "$IF_TRANSPORT" --arg ifCall "$IF_CALL" '
+    .[0] as $root | .[1] as $calls | .[2] as $alias
+    | ($root.data[0][$ag]) as $o
     | ($o[$ifAg] // {}) as $a
     | ($o[$ifTr] // {}) as $t
     | [ ($calls.data[0] // {}) | to_entries[]
@@ -130,11 +134,75 @@ cmd_hangup() {
 }
 
 cmd_dial() {
-  local number=${1:-} ag
+  local number="" ag file
+  case ${1:-} in
+    --stdin) IFS= read -r number || true ;;
+    --from-file)
+      # Written by notify-missed; one use only
+      file=${2:-}
+      [[ $file == "$(missed_dir)"/* && -f $file ]] || { echo "svensson: no such missed call" >&2; exit 1; }
+      number=$(<"$file")
+      rm -f -- "$file"
+      ;;
+    *) number="$*" ;;
+  esac
   number=$(tr -cd '0-9+*#' <<<"$number")
   [[ -n $number ]] || { echo "svensson: dial needs a number" >&2; exit 1; }
   ag=$(require_phone)
-  busctl --user call "$SVC" "$ag" "$IF_AG" Dial s "$number"
+  # busctl would put the number in its arguments; pass it in the environment,
+  # which only the owner can read
+  SVENSSON_NUMBER=$number python3 -I -c '
+import os, sys
+import gi
+gi.require_version("Gio", "2.0")
+from gi.repository import Gio, GLib
+Gio.bus_get_sync(Gio.BusType.SESSION).call_sync(
+    sys.argv[1], sys.argv[2], sys.argv[3], "Dial",
+    GLib.Variant("(s)", (os.environ["SVENSSON_NUMBER"],)),
+    None, Gio.DBusCallFlags.NONE, 30000, None)
+' "$SVC" "$ag" "$IF_AG"
+}
+
+# Private per-user spot for numbers waiting behind a notification's click
+missed_dir() {
+  echo "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/svensson"
+}
+
+# Missed-call notification. Reads one JSON line from stdin:
+#   {"title": …, "body": …, "glyph": …, "number": …}
+# Sends it straight to org.freedesktop.Notifications, the way
+# omarchy-notification-send does, but without putting the caller on a command
+# line. Clicking calls back through a one-shot file in the runtime dir.
+cmd_notify_missed() {
+  local json dir file="" tool
+  IFS= read -r json || true
+  [[ -n $json ]] || { echo "svensson: notify-missed reads JSON from stdin" >&2; exit 1; }
+  dir=$(missed_dir)
+  mkdir -p -m 700 "$dir"
+  find "$dir" -maxdepth 1 -type f -name 'missed-*' -mmin +1440 -delete 2>/dev/null
+  if [[ -n $(jq -r '.number // empty' <<<"$json") ]]; then
+    file=$(umask 077; mktemp "$dir/missed-XXXXXXXX")
+    jq -j '.number' <<<"$json" >"$file"
+  fi
+  tool=$(readlink -f "$0")
+  SVENSSON_NOTIFY=$json python3 -I -c '
+import json, os, sys
+import gi
+gi.require_version("Gio", "2.0")
+from gi.repository import Gio, GLib
+n = json.loads(os.environ["SVENSSON_NOTIFY"])
+tool, file = sys.argv[1], sys.argv[2]
+hints = {"urgency": GLib.Variant("y", 1)}
+if n.get("glyph"):
+    hints["omarchy-glyph"] = GLib.Variant("s", n["glyph"])
+if file:
+    hints["omarchy-exec-argv"] = GLib.Variant("s", json.dumps([tool, "dial", "--from-file", file]))
+Gio.bus_get_sync(Gio.BusType.SESSION).call_sync(
+    "org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+    "org.freedesktop.Notifications", "Notify",
+    GLib.Variant("(susssasa{sv}i)", ("omarchy-action", 0, "", n.get("title", ""), n.get("body", ""), [], hints, -1)),
+    None, Gio.DBusCallFlags.NONE, 10000, None)
+' "$tool" "$file"
 }
 
 cmd_audio() {
@@ -238,7 +306,8 @@ case ${1:-} in
   answer) cmd_answer ;;
   hangup) cmd_hangup ;;
   toggle) cmd_toggle ;;
-  dial) shift; cmd_dial "$*" ;;
+  dial) shift; cmd_dial "$@" ;;
+  notify-missed) cmd_notify_missed ;;
   audio) cmd_audio ;;
   dialer) cmd_dialer ;;
   selftest) cmd_selftest ;;
